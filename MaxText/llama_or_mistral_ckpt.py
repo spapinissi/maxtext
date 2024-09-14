@@ -51,6 +51,7 @@ from tqdm import tqdm
 import max_logging
 from train import save_checkpoint
 import checkpointing
+import safetensors
 
 
 MODEL_PARAMS_DICT = {
@@ -156,7 +157,7 @@ class _HFNamespaceMapper:
   delimiter: str = "."
 
   def __getitem__(self, key):
-    if key in self.collection:
+    if key in self.collection.keys():
       return self.collection[key]  # original key takes precedence
     fields = key.split(self.delimiter)
     num_fields = [int(field) for field in fields if re.match(r"[0-9]+", field) is not None]
@@ -164,7 +165,7 @@ class _HFNamespaceMapper:
     if key not in mapping:
       raise ValueError(f"Key `{key}` is missing from the original collection and from the mapping.")
     new_key = mapping[key]
-    if new_key not in self.collection:
+    if new_key not in self.collection.keys():
       raise ValueError(f"New key `{new_key}` mapped from `{key}` is missing from the collection.")
     return self.collection[new_key]
 
@@ -197,13 +198,15 @@ def convert_to_jax_weights(base_model_path, model_size):
 
   max_logging.log(f"Loading the base model from {base_model_path}")
   # Skip any hidden files for checkpoints
-  ckpt_paths = sorted(pathlib.Path(base_model_path).glob("[!.]*.pth"))
-  chkpt_vars = {}
+  ckpt_paths = sorted(pathlib.Path(base_model_path).glob("[!.]*.safetensors"))
+  chkpt_vars = [{}]
   for i, ckpt_path in enumerate(ckpt_paths):
-    max_logging.log(f"Loading checkpoint {i+1} of {len(ckpt_paths)} ...")
-    checkpoint = torch.load(ckpt_path, map_location="cpu")
-    chkpt_vars[int(ckpt_path.name.split(".", maxsplit=2)[1])] = checkpoint
-  chkpt_vars = [chkpt_vars[i] for i in sorted(list(chkpt_vars.keys()))]
+    print(f"Loading checkpoint {i+1} of {len(ckpt_paths)} ...")
+    checkpoint = safetensors.safe_open(ckpt_path, "torch", "cpu")
+    for k in checkpoint.keys():
+      chkpt_vars[0][k] = checkpoint.get_tensor(k)  
+    # chkpt_vars[int(ckpt_path.name.split("-")[-3])] = checkpoint
+  # chkpt_vars = [chkpt_vars[i] for i in sorted(list(chkpt_vars.keys()))]
   # map weight names if they use HuggingFace instead of PyTorch convention
   chkpt_vars = [_HFNamespaceMapper(var) for var in chkpt_vars]
 
